@@ -7,6 +7,7 @@ import
    deleteOrganizationController as deleteOrganization
 } from "../controllers/organization.controller.js";
 import locationRouter from "./location.routes.js";
+import serviceRouter from "./service.routes.js";
 
 const router = express.Router();
 
@@ -17,5 +18,6 @@ router.patch("/:id", updateOrganization)
 router.delete("/:id",deleteOrganization)
 
 router.use("/:organizationId/locations", locationRouter);
+router.use("/:organizationId/services", serviceRouter);
 
 export default router;
