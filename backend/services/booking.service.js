@@ -5,6 +5,14 @@ import pool from "../db/pool.js";
 // CREATE BOOKING
 // ==========================================
 
+const ALLOWED_STATUS_TRANSITIONS = {
+    pending: ["confirmed", "cancelled"],
+    confirmed: ["completed", "cancelled"],
+    cancelled: [],
+    completed: []
+};
+
+
 async function createBooking({
     customerId,
     serviceId,
@@ -17,164 +25,192 @@ async function createBooking({
 }) {
     const client = await pool.connect();
 
+    const MAX_ATTEMPTS = 3;
+
     try {
-        // 1. Start transaction
-        await client.query("BEGIN");
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                // 1. Start transaction
+                await client.query("BEGIN");
 
-        // 2. Check customer
-        const customer = await client.query(
-            `SELECT id FROM customers WHERE id = $1`,
-            [customerId]
-        );
+                // 2. Check customer
+                const customer = await client.query(
+                    `SELECT id FROM customers WHERE id = $1`,
+                    [customerId]
+                );
 
-        if (customer.rows.length === 0) {
-            await client.query("ROLLBACK");
-            return { error: "Customer not found", statusCode: 404 };
-        }
+                if (customer.rows.length === 0) {
+                    await client.query("ROLLBACK");
+                    return { error: "Customer not found", statusCode: 404 };
+                }
 
-        // 3. Check staff
-        const staff = await client.query(
-            `SELECT id, location_id FROM staff WHERE id = $1`,
-            [staffId]
-        );
+                // 3. Check staff
+                const staff = await client.query(
+                    `SELECT id, location_id FROM staff WHERE id = $1`,
+                    [staffId]
+                );
 
-        if (staff.rows.length === 0) {
-            await client.query("ROLLBACK");
-            return { error: "Staff member not found", statusCode: 404 };
-        }
+                if (staff.rows.length === 0) {
+                    await client.query("ROLLBACK");
+                    return { error: "Staff member not found", statusCode: 404 };
+                }
 
-        // 4. Check location
-        const location = await client.query(
-            `SELECT id FROM locations WHERE id = $1`,
-            [locationId]
-        );
+                // 4. Check location
+                const location = await client.query(
+                    `SELECT id FROM locations WHERE id = $1`,
+                    [locationId]
+                );
 
-        if (location.rows.length === 0) {
-            await client.query("ROLLBACK");
-            return { error: "Location not found", statusCode: 404 };
-        }
+                if (location.rows.length === 0) {
+                    await client.query("ROLLBACK");
+                    return { error: "Location not found", statusCode: 404 };
+                }
 
-        // 5. Check service
-        const service = await client.query(
-            `SELECT id FROM services WHERE id = $1`,
-            [serviceId]
-        );
+                // 5. Check service
+                const service = await client.query(
+                    `SELECT id FROM services WHERE id = $1`,
+                    [serviceId]
+                );
 
-        if (service.rows.length === 0) {
-            await client.query("ROLLBACK");
-            return { error: "Service not found", statusCode: 404 };
-        }
+                if (service.rows.length === 0) {
+                    await client.query("ROLLBACK");
+                    return { error: "Service not found", statusCode: 404 };
+                }
 
-        // 6. Check whether staff belongs to location
-        if (staff.rows[0].location_id !== locationId) {
-            await client.query("ROLLBACK");
+                // 6. Check whether staff belongs to location
+                if (staff.rows[0].location_id !== locationId) {
+                    await client.query("ROLLBACK");
 
-            return {
-                error: "Staff member does not belong to this location",
-                statusCode: 400
-            };
-        }
+                    return {
+                        error: "Staff member does not belong to this location",
+                        statusCode: 400
+                    };
+                }
 
-        // 7. Check whether staff provides service
-        const staffService = await client.query(
-            `SELECT 1
-             FROM staff_services
-             WHERE staff_id = $1 AND service_id = $2`,
-            [staffId, serviceId]
-        );
+                // 7. Check whether staff provides service
+                const staffService = await client.query(
+                    `SELECT 1
+                     FROM staff_services
+                     WHERE staff_id = $1 AND service_id = $2`,
+                    [staffId, serviceId]
+                );
 
-        if (staffService.rows.length === 0) {
-            await client.query("ROLLBACK");
+                if (staffService.rows.length === 0) {
+                    await client.query("ROLLBACK");
 
-            return {
-                error: "Staff member does not provide this service",
-                statusCode: 400
-            };
-        }
+                    return {
+                        error: "Staff member does not provide this service",
+                        statusCode: 400
+                    };
+                }
 
-        // 8. Check whether location offers service
-        const locationService = await client.query(
-            `SELECT 1
-             FROM location_services
-             WHERE location_id = $1 AND service_id = $2`,
-            [locationId, serviceId]
-        );
+                // 8. Check whether location offers service
+                const locationService = await client.query(
+                    `SELECT 1
+                     FROM location_services
+                     WHERE location_id = $1 AND service_id = $2`,
+                    [locationId, serviceId]
+                );
 
-        if (locationService.rows.length === 0) {
-            await client.query("ROLLBACK");
+                if (locationService.rows.length === 0) {
+                    await client.query("ROLLBACK");
 
-            return {
-                error: "This service is not available at this location",
-                statusCode: 400
-            };
-        }
+                    return {
+                        error: "This service is not available at this location",
+                        statusCode: 400
+                    };
+                }
 
-        // 9. Check booking conflicts
-        if (status === "confirmed") {
-            const conflict = await client.query(
-                `SELECT id
-                 FROM bookings
-                 WHERE staff_id = $1
-                   AND status = 'confirmed'
-                   AND start_time < $3
-                   AND end_time > $2
-                 LIMIT 1`,
-                [staffId, startTime, endTime]
-            );
+                // 9. Check booking conflicts
+                if (status === "confirmed") {
+                    const conflict = await client.query(
+                        `SELECT id
+                         FROM bookings
+                         WHERE staff_id = $1
+                           AND status = 'confirmed'
+                           AND start_time < $3
+                           AND end_time > $2
+                         LIMIT 1`,
+                        [staffId, startTime, endTime]
+                    );
 
-            if (conflict.rows.length > 0) {
+                    if (conflict.rows.length > 0) {
+                        await client.query("ROLLBACK");
+
+                        return {
+                            error: "This staff member already has a booking during the selected time",
+                            statusCode: 409
+                        };
+                    }
+                }
+
+                // 10. Create booking
+                const result = await client.query(
+                    `INSERT INTO bookings (
+                        customer_id,
+                        service_id,
+                        staff_id,
+                        location_id,
+                        start_time,
+                        end_time,
+                        price,
+                        status
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    RETURNING *`,
+                    [
+                        customerId,
+                        serviceId,
+                        staffId,
+                        locationId,
+                        startTime,
+                        endTime,
+                        price,
+                        status
+                    ]
+                );
+
+                // 11. Commit transaction
+                await client.query("COMMIT");
+
+                return { data: result.rows[0] };
+
+            } catch (error) {
+                // Roll back the failed transaction
                 await client.query("ROLLBACK");
 
-                return {
-                    error: "This staff member already has a booking during the selected time",
-                    statusCode: 409
-                };
+                // PostgreSQL exclusion constraint violation
+                if (error.code === "23P01") {
+                    return {
+                        error: "This staff member already has a booking during the selected time",
+                        statusCode: 409
+                    };
+                }
+
+                // Deadlock detected
+                if (error.code === "40P01") {
+                    if (attempt < MAX_ATTEMPTS) {
+                        console.log(
+                            `Deadlock detected. Retrying booking transaction (${attempt + 1}/${MAX_ATTEMPTS})...`
+                        );
+
+                        // Small delay before retrying
+                        await new Promise(resolve =>
+                            setTimeout(resolve, 100 * attempt)
+                        );
+
+                        continue;
+                    }
+
+                    return {
+                        error: "Booking could not be processed due to concurrent activity. Please try again.",
+                        statusCode: 503
+                    };
+                }
+
+                throw error;
             }
         }
-
-        // 10. Create booking
-        const result = await client.query(
-            `INSERT INTO bookings (
-                customer_id,
-                service_id,
-                staff_id,
-                location_id,
-                start_time,
-                end_time,
-                price,
-                status
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING *`,
-            [
-                customerId,
-                serviceId,
-                staffId,
-                locationId,
-                startTime,
-                endTime,
-                price,
-                status
-            ]
-        );
-
-        // 11. Commit transaction
-        await client.query("COMMIT");
-
-        return { data: result.rows[0] };
-
-    } catch (error) {
-        await client.query("ROLLBACK");
-
-        // PostgreSQL exclusion constraint violation
-        if (error.code === "23P01") {
-            return {
-                error: "This staff member already has a booking during the selected time",
-                statusCode: 409
-            };
-        }
-
-        throw error;
 
     } finally {
         // 12. Release connection
@@ -280,6 +316,18 @@ async function updateBooking(bookingId, data) {
             };
         }
 
+        if (
+            existingBooking.status === "cancelled" ||
+            existingBooking.status === "completed"
+        ) {
+            await client.query("ROLLBACK");
+
+            return {
+                error: `Cannot edit a ${existingBooking.status} booking`,
+                statusCode: 409
+            };
+        }
+
         // 3. Check whether at least one field was supplied
         const hasUpdates = Object.values(data).some(
             value => value !== undefined
@@ -379,6 +427,31 @@ async function updateBooking(bookingId, data) {
             return {
                 error: "Invalid booking status",
                 statusCode: 400
+            };
+        }
+
+        if (
+            existingBooking.status === "pending" &&
+            updatedBooking.status === "confirmed" &&
+            new Date(updatedBooking.startTime) <= new Date()
+        ) {
+            await client.query("ROLLBACK");
+
+            return {
+                error: "Cannot confirm a booking whose scheduled time has already passed",
+                statusCode: 409
+            };
+        }
+
+        if (
+            updatedBooking.status !== existingBooking.status &&
+            !ALLOWED_STATUS_TRANSITIONS[existingBooking.status].includes(updatedBooking.status)
+        ) {
+            await client.query("ROLLBACK");
+
+            return {
+                error: `Cannot change booking status from ${existingBooking.status} to ${updatedBooking.status}`,
+                statusCode: 409
             };
         }
 

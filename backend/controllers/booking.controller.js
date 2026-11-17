@@ -135,7 +135,7 @@ async function getBookingByIdController(req, res, next) {
         const { bookingId } = req.params;
 
         // 1. Validate UUID
-        if (!UUID_REGEX.test(bookingId)) {
+        if (!uuidRegex.test(bookingId)) {
             return res.status(400).json({
                 error: "Invalid booking ID"
             });
@@ -166,7 +166,7 @@ const updateBookingController = async (req, res, next) => {
     try {
         const { bookingId } = req.params;
 
-        if (!UUID_REGEX.test(bookingId)) {
+        if (!uuidRegex.test(bookingId)) {
             return res.status(400).json({
                 message: "Invalid booking ID"
             });
@@ -211,11 +211,11 @@ const updateBookingController = async (req, res, next) => {
 };
 
 
-export const deleteBookingController = async (req, res, next) => {
+const deleteBookingController = async (req, res, next) => {
     try {
         const { bookingId } = req.params;
 
-        if (!UUID_REGEX.test(bookingId)) {
+        if (!uuidRegex.test(bookingId)) {
             return res.status(400).json({
                 message: "Invalid booking ID"
             });
